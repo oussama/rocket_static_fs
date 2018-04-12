@@ -1,0 +1,10 @@
+[package]
+name = "rocket_static_fs"
+version = "0.1.0"
+authors = ["Marvin Lee Fimmel <kontakt@ekranos.me>"]
+
+[dependencies]
+rocket = "0.3"
+chrono = "0.4"
+mime_guess = "1.8"
+flate2 = "1.0"
