@@ -171,3 +171,25 @@ impl Fairing for StaticFileServer {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use rocket;
+    use rocket::http::{Status, Header};
+    use rocket::local::Client;
+    use super::StaticFileServer;
+
+    #[test]
+    fn test_fairing() {
+        let rocket = rocket::ignite().attach(StaticFileServer::new("src", "/test").unwrap());
+        let client = Client::new(rocket).expect("valid rocket");
+
+        let resp = client.get("/test/lib.rs").dispatch();
+        assert_eq!(resp.status(), Status::Ok);
+        assert_eq!(resp.headers().get_one("Content-Type").expect("no content type"), "text/x-rust");
+        let last_modified = resp.headers().get_one("Last-Modified").expect("no last modified header").to_owned();
+
+        let resp = client.get("/test/lib.rs").header(Header::new("If-Modified-Since", last_modified)).dispatch();
+        assert_eq!(resp.status(), Status::NotModified);
+    }
+}
