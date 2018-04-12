@@ -13,6 +13,7 @@ A simple static file server for Rust's rocket framework.
 
 - Support for more encodings
 - Cache-Control header rules
+- Support directory listing
 
 ## Suggestions / Contributions?
 
