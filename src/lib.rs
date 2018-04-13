@@ -30,6 +30,8 @@ extern crate flate2;
 extern crate mime_guess;
 extern crate rocket;
 
+pub mod fs;
+
 use chrono::prelude::*;
 use flate2::read::GzEncoder;
 use flate2::Compression;
@@ -39,35 +41,33 @@ use rocket::http::Method;
 use rocket::http::Status;
 use rocket::{Request, Response};
 use std::error::Error;
-use std::fs;
-use std::fs::File;
-use std::path::PathBuf;
+use fs::FileSystem;
+use std::path::Path;
 
 /// StaticFileServer is your fairing for the static file server.
-pub struct StaticFileServer {
-    path: PathBuf,
+pub struct StaticFileServer<T> where T: FileSystem + Sized + Send + Sync {
+    fs: T,
     prefix: String,
 }
 
-impl StaticFileServer {
+impl<T> StaticFileServer<T> where T: FileSystem + Sized + Send + Sync {
     /// Constructs a new StaticFileServer fairing.
     ///
     /// `path` is local directory to serve from.
     /// `prefix` is the prefix the serve from.
     ///
     /// You can set a prefix of /assets and only requests to /assets/* will be served.
-    pub fn new(path: &str, prefix: &str) -> Result<Self, Box<Error>> {
-        let path = fs::canonicalize(path)?;
+    pub fn new(fs: T, prefix: &str) -> Result<Self, Box<Error>> {
         let mut prefix = prefix.to_string();
         if !prefix.ends_with('/') {
             prefix.push_str("/");
         }
 
-        Ok(StaticFileServer { path, prefix })
+        Ok(StaticFileServer { fs: fs, prefix })
     }
 }
 
-impl Fairing for StaticFileServer {
+impl<T: 'static> Fairing for StaticFileServer<T> where T: FileSystem + Sized + Send + Sync {
     fn info(&self) -> Info {
         Info {
             name: "static_file_server",
@@ -89,43 +89,29 @@ impl Fairing for StaticFileServer {
 
         // Strip out the prefix to get the normal file path
         let req_path = uri.replacen(&self.prefix, "", 1);
-        // The canonicalize here isn't strictly needed. Rocket currently strips out stuff like "../"
-        // but let's better be sure about it.
-        let file_path =
-            fs::canonicalize(self.path.join(req_path)).expect("unable to canonicalize path");
 
         // Fail on paths outside of the given path
-        if !file_path.starts_with(&self.path) {
+        if !self.fs.path_valid(&req_path) {
             response.set_status(Status::Forbidden);
             return;
-        }
+        };
 
         // Fail if it is no file
         // TODO: Support directory listing
-        if !file_path.is_file() {
+        if !self.fs.is_file(&req_path) {
             response.set_status(Status::NotFound);
             return;
-        }
-
-        let meta = match file_path.metadata() {
-            Ok(m) => m,
-            Err(_) => {
-                // TODO: What else could go wrong here? IMO it can be just no permissions
-                response.set_status(Status::Forbidden);
-                return;
-            }
         };
 
         // Let's set the mime type here, this can't possibly go wrong anymore *cough*.
         {
-            let file_extension = file_path.extension().unwrap().to_str().unwrap();
+            let file_extension = Path::new(&req_path).extension().unwrap().to_str().unwrap();
             let mime = get_mime_type(file_extension).to_string();
             response.set_raw_header("Content-Type", mime);
-        }
+        };
 
         // Get the file modification date and the If-Modified-Since header value
-        let modified = meta.modified()
-            .expect("unable to get metadata modified date");
+        let modified = self.fs.last_modified(&req_path).expect("no modified since");
         let modified: DateTime<Utc> = DateTime::from(modified);
         let if_modified_since = request.headers().get("If-Modified-Since").next();
 
@@ -137,13 +123,13 @@ impl Fairing for StaticFileServer {
                 if duration.num_seconds() == 0 {
                     response.set_status(Status::NotModified);
                     return;
-                }
-            }
-        }
+                };
+            };
+        };
 
         // Otherwise we try to send the file, which should work since that stat above should have
         // worked as well.
-        match File::open(file_path) {
+        match self.fs.open(req_path, None) {
             Ok(f) => {
                 response.set_status(Status::Ok);
                 response.set_raw_header(
@@ -159,8 +145,8 @@ impl Fairing for StaticFileServer {
                         response.set_raw_header("Content-Encoding", "gzip");
                         response.set_streamed_body(encoder);
                         return;
-                    }
-                }
+                    };
+                };
 
                 response.set_streamed_body(f);
             }
@@ -178,10 +164,12 @@ mod tests {
     use rocket::http::{Status, Header};
     use rocket::local::Client;
     use super::StaticFileServer;
+    use super::fs::LocalFileSystem;
 
     #[test]
-    fn test_fairing() {
-        let rocket = rocket::ignite().attach(StaticFileServer::new("src", "/test").unwrap());
+    fn test_with_local_filesystem() {
+        let fs = LocalFileSystem::new("src");
+        let rocket = rocket::ignite().attach(StaticFileServer::new(fs, "/test").unwrap());
         let client = Client::new(rocket).expect("valid rocket");
 
         let resp = client.get("/test/lib.rs").dispatch();
