@@ -36,13 +36,11 @@ extern crate rocket;
 extern crate lazy_static;
 
 pub mod fs;
-pub mod io;
 
 use chrono::prelude::*;
 use flate2::read::GzEncoder;
 use flate2::Compression;
 use fs::FileSystem;
-use io::LimitReader;
 use mime_guess::get_mime_type;
 use regex::Regex;
 use rocket::fairing::{Fairing, Info, Kind};
@@ -54,6 +52,7 @@ use std::error::Error as StdError;
 use std::fmt;
 use std::path::Path;
 use std::str::FromStr;
+use std::io::Read;
 
 lazy_static! {
     static ref RANGE_HEADER_REGEX: Regex = Regex::new(r#"(.*?)=(\d+)-(\d+)"#).unwrap();
@@ -122,16 +121,16 @@ impl FromStr for Range {
 
 /// StaticFileServer is your fairing for the static file server.
 pub struct StaticFileServer<T>
-where
-    T: FileSystem + Sized + Send + Sync,
+    where
+        T: FileSystem + Sized + Send + Sync,
 {
     fs: T,
     prefix: String,
 }
 
 impl<T> StaticFileServer<T>
-where
-    T: FileSystem + Sized + Send + Sync,
+    where
+        T: FileSystem + Sized + Send + Sync,
 {
     /// Constructs a new StaticFileServer fairing.
     ///
@@ -150,8 +149,8 @@ where
 }
 
 impl<T: 'static> Fairing for StaticFileServer<T>
-where
-    T: FileSystem + Sized + Send + Sync,
+    where
+        T: FileSystem + Sized + Send + Sync,
 {
     fn info(&self) -> Info {
         Info {
@@ -170,9 +169,9 @@ where
         let uri = request.uri().as_str();
         if !((request.method() == Method::Get || request.method() == Method::Head)
             && uri.starts_with(&self.prefix))
-        {
-            return;
-        }
+            {
+                return;
+            }
 
         // Strip out the prefix to get the normal file path
         let req_path = uri.replacen(&self.prefix, "", 1);
@@ -216,19 +215,23 @@ where
             };
         }
 
+        let size = match self.fs.size(&req_path) {
+            Ok(s) => s,
+            Err(_) => {
+                response.set_status(Status::Forbidden);
+                return;
+            }
+        };
+
         // In case someone heads the file, we inform him about the content length and
         // that we support byte ranges.
         if request.method() == Method::Head {
-            match self.fs.size(req_path) {
-                Ok(size) => {
-                    response.set_header(Header::new("Accept-Ranges", "bytes"));
-                    response.set_header(Header::new("Content-Length", format!("{}", size)));
-                    response.set_status(Status::Ok);
-                }
-                _ => response.set_status(Status::Forbidden),
-            }
+            response.set_header(Header::new("Accept-Ranges", "bytes"));
+            response.set_header(Header::new("Content-Length", format!("{}", size)));
+            response.set_status(Status::Ok);
             return;
         }
+
 
         // Let's parse the range header if it exists
         let range = request.headers().get_one("Range").unwrap_or("");
@@ -242,7 +245,7 @@ where
 
         // Otherwise we try to send the file, which should work since that size above should have
         // worked as well.
-        match self.fs.open(req_path, Some(start)) {
+        match self.fs.open(&req_path, Some(start)) {
             Ok(mut f) => {
                 response.set_header(Header::new("Accept-Ranges", "bytes"));
                 response.set_status(Status::Ok);
@@ -254,12 +257,13 @@ where
                 // If we got a range header, we set the corresponding headers here and
                 // set f to a limit reader so it will stop when it reached the range len.
                 if let Ok(ref range) = range {
-                    f = Box::new(LimitReader::new(f, range.len()));
+                    f = Box::new(f.take(range.len()));
                     response.set_header(Header::new("Content-Length", format!("{}", range.len())));
                     response.set_header(Header::new(
                         "Content-Range",
-                        format!("{}={}-{}", range.typ, range.start, range.end),
+                        format!("{}={}-{}/{}", range.typ, range.start, range.end, size),
                     ));
+                    response.set_status(Status::PartialContent);
                 }
 
                 // In case the client accepts encodings, we handle these
@@ -325,6 +329,8 @@ mod tests {
             .get("/test/lib.rs")
             .header(Header::new("Range", "bytes=5-10"))
             .dispatch();
+        assert_eq!(resp.status(), Status::PartialContent);
+        assert_eq!(resp.headers().get_one("Content-Length"), Some("6"));
         let body = resp.body_bytes().unwrap();
         assert_eq!(body.len(), 6);
     }
