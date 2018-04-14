@@ -75,7 +75,7 @@ impl<'a> Package<'a> {
             let cursor_clone = cursor.clone();
             let mut path_reader = cursor_clone.take(path_len);
             path_reader.read_to_string(&mut path)?;
-            cursor.seek(SeekFrom::Start(path_len))?;
+            cursor.seek(SeekFrom::Current(path_len as i64))?;
 
             let last_modified_seconds = cursor.read_i64::<BigEndian>()?;
             let last_modified: DateTime<Utc> = Utc.timestamp(last_modified_seconds, 0);
