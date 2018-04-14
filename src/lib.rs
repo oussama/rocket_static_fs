@@ -50,9 +50,9 @@ use rocket::http::Status;
 use rocket::{Request, Response};
 use std::error::Error as StdError;
 use std::fmt;
+use std::io::Read;
 use std::path::Path;
 use std::str::FromStr;
-use std::io::Read;
 
 lazy_static! {
     static ref RANGE_HEADER_REGEX: Regex = Regex::new(r#"(.*?)=(\d+)-(\d+)"#).unwrap();
@@ -121,16 +121,16 @@ impl FromStr for Range {
 
 /// StaticFileServer is your fairing for the static file server.
 pub struct StaticFileServer<T>
-    where
-        T: FileSystem + Sized + Send + Sync,
+where
+    T: FileSystem + Sized + Send + Sync,
 {
     fs: T,
     prefix: String,
 }
 
 impl<T> StaticFileServer<T>
-    where
-        T: FileSystem + Sized + Send + Sync,
+where
+    T: FileSystem + Sized + Send + Sync,
 {
     /// Constructs a new StaticFileServer fairing.
     ///
@@ -149,8 +149,8 @@ impl<T> StaticFileServer<T>
 }
 
 impl<T: 'static> Fairing for StaticFileServer<T>
-    where
-        T: FileSystem + Sized + Send + Sync,
+where
+    T: FileSystem + Sized + Send + Sync,
 {
     fn info(&self) -> Info {
         Info {
@@ -169,9 +169,9 @@ impl<T: 'static> Fairing for StaticFileServer<T>
         let uri = request.uri().as_str();
         if !((request.method() == Method::Get || request.method() == Method::Head)
             && uri.starts_with(&self.prefix))
-            {
-                return;
-            }
+        {
+            return;
+        }
 
         // Strip out the prefix to get the normal file path
         let req_path = uri.replacen(&self.prefix, "", 1);
@@ -231,7 +231,6 @@ impl<T: 'static> Fairing for StaticFileServer<T>
             response.set_status(Status::Ok);
             return;
         }
-
 
         // Let's parse the range header if it exists
         let range = request.headers().get_one("Range").unwrap_or("");
