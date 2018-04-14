@@ -34,6 +34,7 @@ extern crate regex;
 extern crate rocket;
 #[macro_use]
 extern crate lazy_static;
+extern crate byteorder;
 
 pub mod fs;
 
@@ -57,6 +58,8 @@ use std::str::FromStr;
 lazy_static! {
     static ref RANGE_HEADER_REGEX: Regex = Regex::new(r#"(.*?)=(\d+)-(\d+)"#).unwrap();
 }
+
+const LAST_MODIFIED_DATE_FORMAT: &str = "%a, %d %b %Y %H:%M:%S GMT";
 
 #[derive(Debug)]
 struct Error {
@@ -205,7 +208,7 @@ where
         // respond with a 304 here
         if request.method() == Method::Get {
             if let Some(time) = if_modified_since {
-                if let Ok(time) = Utc.datetime_from_str(&time, "%a, %d %b %Y %H:%M:%S GMT") {
+                if let Ok(time) = Utc.datetime_from_str(&time, LAST_MODIFIED_DATE_FORMAT) {
                     let duration: chrono::Duration = time.signed_duration_since(modified);
                     if duration.num_seconds() == 0 {
                         response.set_status(Status::NotModified);
@@ -258,7 +261,7 @@ where
                 response.set_status(Status::Ok);
                 response.set_raw_header(
                     "Last-Modified",
-                    modified.format("%a, %d %b %Y %H:%M:%S GMT").to_string(),
+                    modified.format(LAST_MODIFIED_DATE_FORMAT).to_string(),
                 );
 
                 // If we got a range header, we set the corresponding headers here and

@@ -7,6 +7,8 @@ use std::io::{Read, Seek};
 use std::path::PathBuf;
 use std::time::SystemTime;
 
+mod embedded;
+
 /// Implement this trait to provide a filesystem to serve from.
 pub trait FileSystem {
     fn is_file<P: ToString>(&self, path: P) -> bool;
