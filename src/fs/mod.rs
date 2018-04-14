@@ -1,11 +1,11 @@
 //! Includes the FileSystem trait and built-in implementations.
 
-use std::io::{Read, Seek};
-use std::time::SystemTime;
-use std::path::PathBuf;
 use std::error::Error;
 use std::fs::File;
 use std::io::SeekFrom;
+use std::io::{Read, Seek};
+use std::path::PathBuf;
+use std::time::SystemTime;
 
 /// Implement this trait to provide a filesystem to serve from.
 pub trait FileSystem {
@@ -23,7 +23,9 @@ pub struct LocalFileSystem {
 
 impl LocalFileSystem {
     pub fn new<P: ToString>(path: P) -> LocalFileSystem {
-        LocalFileSystem{path: PathBuf::from(path.to_string())}
+        LocalFileSystem {
+            path: PathBuf::from(path.to_string()),
+        }
     }
 }
 

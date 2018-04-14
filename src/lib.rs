@@ -5,69 +5,154 @@
 //!
 //! This example works for sharing the src folder of your app.
 //!
-//! ```rust.ignore
+//! ```
 //! #![feature(plugin)]
 //! #![plugin(rocket_codegen)]
 //!
 //! extern crate rocket;
 //! extern crate rocket_static_fs;
 //!
+//! use rocket_static_fs::{StaticFileServer, fs};
+//!
 //! #[get("/")]
 //! fn index() -> &'static str {
-//!     "Hellos, world!"
+//!     "Hello, world!"
 //! }
 //!
 //! fn main() {
 //!     rocket::ignite()
-//!         .attach(rocket_static_fs::StaticFileServer::new("src", "/src/").unwrap())
-//!         .mount("/", routes![index])
-//!         .launch();
+//!         .attach(StaticFileServer::new(fs::LocalFileSystem::new("src"), "/src/").unwrap())
+//!         .mount("/", routes![index]);
+//!     // And finally launch it
 //! }
 //! ```
 
 extern crate chrono;
 extern crate flate2;
 extern crate mime_guess;
+extern crate regex;
 extern crate rocket;
+#[macro_use]
+extern crate lazy_static;
 
 pub mod fs;
+pub mod io;
 
 use chrono::prelude::*;
 use flate2::read::GzEncoder;
 use flate2::Compression;
+use fs::FileSystem;
+use io::LimitReader;
 use mime_guess::get_mime_type;
+use regex::Regex;
 use rocket::fairing::{Fairing, Info, Kind};
+use rocket::http::Header;
 use rocket::http::Method;
 use rocket::http::Status;
 use rocket::{Request, Response};
-use std::error::Error;
-use fs::FileSystem;
+use std::error::Error as StdError;
+use std::fmt;
 use std::path::Path;
+use std::str::FromStr;
+
+lazy_static! {
+    static ref RANGE_HEADER_REGEX: Regex = Regex::new(r#"(.*?)=(\d+)-(\d+)"#).unwrap();
+}
+
+#[derive(Debug)]
+struct Error {
+    description: String,
+}
+
+impl Error {
+    fn new(description: &str) -> Self {
+        Error {
+            description: description.to_string(),
+        }
+    }
+}
+
+impl StdError for Error {
+    fn description(&self) -> &str {
+        &self.description
+    }
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+        f.write_str(&self.description)
+    }
+}
+
+/// Represents a `Range` header.
+///
+/// Implements FromStr for convenience.
+struct Range {
+    typ: String,
+    start: u64,
+    end: u64,
+}
+
+impl Range {
+    fn len(&self) -> u64 {
+        self.end - self.start + 1
+    }
+}
+
+impl FromStr for Range {
+    type Err = Box<StdError>;
+
+    fn from_str(s: &str) -> Result<Self, <Self as FromStr>::Err> {
+        match RANGE_HEADER_REGEX.captures(s) {
+            Some(matches) => {
+                let typ = &matches[1];
+                let start: u64 = matches[2].parse()?;
+                let end: u64 = matches[3].parse()?;
+
+                Ok(Range {
+                    typ: typ.to_string(),
+                    start,
+                    end,
+                })
+            }
+            None => Err(Box::new(Error::new("invalid range header"))),
+        }
+    }
+}
 
 /// StaticFileServer is your fairing for the static file server.
-pub struct StaticFileServer<T> where T: FileSystem + Sized + Send + Sync {
+pub struct StaticFileServer<T>
+where
+    T: FileSystem + Sized + Send + Sync,
+{
     fs: T,
     prefix: String,
 }
 
-impl<T> StaticFileServer<T> where T: FileSystem + Sized + Send + Sync {
+impl<T> StaticFileServer<T>
+where
+    T: FileSystem + Sized + Send + Sync,
+{
     /// Constructs a new StaticFileServer fairing.
     ///
     /// `path` is local directory to serve from.
     /// `prefix` is the prefix the serve from.
     ///
     /// You can set a prefix of /assets and only requests to /assets/* will be served.
-    pub fn new(fs: T, prefix: &str) -> Result<Self, Box<Error>> {
+    pub fn new(fs: T, prefix: &str) -> Result<Self, Box<StdError>> {
         let mut prefix = prefix.to_string();
         if !prefix.ends_with('/') {
             prefix.push_str("/");
         }
 
-        Ok(StaticFileServer { fs: fs, prefix })
+        Ok(StaticFileServer { fs, prefix })
     }
 }
 
-impl<T: 'static> Fairing for StaticFileServer<T> where T: FileSystem + Sized + Send + Sync {
+impl<T: 'static> Fairing for StaticFileServer<T>
+where
+    T: FileSystem + Sized + Send + Sync,
+{
     fn info(&self) -> Info {
         Info {
             name: "static_file_server",
@@ -83,7 +168,9 @@ impl<T: 'static> Fairing for StaticFileServer<T> where T: FileSystem + Sized + S
 
         // Only handle requests which include our prefix
         let uri = request.uri().as_str();
-        if !(request.method() == Method::Get && uri.starts_with(&self.prefix)) {
+        if !((request.method() == Method::Get || request.method() == Method::Head)
+            && uri.starts_with(&self.prefix))
+        {
             return;
         }
 
@@ -115,27 +202,65 @@ impl<T: 'static> Fairing for StaticFileServer<T> where T: FileSystem + Sized + S
         let modified: DateTime<Utc> = DateTime::from(modified);
         let if_modified_since = request.headers().get("If-Modified-Since").next();
 
-        // If the If-Modified-Since header and the modified time of the file are the same, we
+        // Only on a GET request: If the If-Modified-Since header and the modified time of the file are the same, we
         // respond with a 304 here
-        if let Some(time) = if_modified_since {
-            if let Ok(time) = Utc.datetime_from_str(&time, "%a, %d %b %Y %H:%M:%S GMT") {
-                let duration: chrono::Duration = time.signed_duration_since(modified);
-                if duration.num_seconds() == 0 {
-                    response.set_status(Status::NotModified);
-                    return;
+        if request.method() == Method::Get {
+            if let Some(time) = if_modified_since {
+                if let Ok(time) = Utc.datetime_from_str(&time, "%a, %d %b %Y %H:%M:%S GMT") {
+                    let duration: chrono::Duration = time.signed_duration_since(modified);
+                    if duration.num_seconds() == 0 {
+                        response.set_status(Status::NotModified);
+                        return;
+                    };
                 };
             };
+        }
+
+        // In case someone heads the file, we inform him about the content length and
+        // that we support byte ranges.
+        if request.method() == Method::Head {
+            match self.fs.size(req_path) {
+                Ok(size) => {
+                    response.set_header(Header::new("Accept-Ranges", "bytes"));
+                    response.set_header(Header::new("Content-Length", format!("{}", size)));
+                    response.set_status(Status::Ok);
+                }
+                _ => response.set_status(Status::Forbidden),
+            }
+            return;
+        }
+
+        // Let's parse the range header if it exists
+        let range = request.headers().get_one("Range").unwrap_or("");
+        let range = range.parse::<Range>();
+
+        // Set the start byte for the request
+        let start = match range {
+            Ok(ref range) => range.start,
+            Err(_) => 0,
         };
 
-        // Otherwise we try to send the file, which should work since that stat above should have
+        // Otherwise we try to send the file, which should work since that size above should have
         // worked as well.
-        match self.fs.open(req_path, None) {
-            Ok(f) => {
+        match self.fs.open(req_path, Some(start)) {
+            Ok(mut f) => {
+                response.set_header(Header::new("Accept-Ranges", "bytes"));
                 response.set_status(Status::Ok);
                 response.set_raw_header(
                     "Last-Modified",
                     modified.format("%a, %d %b %Y %H:%M:%S GMT").to_string(),
                 );
+
+                // If we got a range header, we set the corresponding headers here and
+                // set f to a limit reader so it will stop when it reached the range len.
+                if let Ok(ref range) = range {
+                    f = Box::new(LimitReader::new(f, range.len()));
+                    response.set_header(Header::new("Content-Length", format!("{}", range.len())));
+                    response.set_header(Header::new(
+                        "Content-Range",
+                        format!("{}={}-{}", range.typ, range.start, range.end),
+                    ));
+                }
 
                 // In case the client accepts encodings, we handle these
                 // TODO: Support more encodings
@@ -160,11 +285,12 @@ impl<T: 'static> Fairing for StaticFileServer<T> where T: FileSystem + Sized + S
 
 #[cfg(test)]
 mod tests {
-    use rocket;
-    use rocket::http::{Status, Header};
-    use rocket::local::Client;
-    use super::StaticFileServer;
     use super::fs::LocalFileSystem;
+    use super::Range;
+    use super::StaticFileServer;
+    use rocket;
+    use rocket::http::{Header, Status};
+    use rocket::local::Client;
 
     #[test]
     fn test_with_local_filesystem() {
@@ -172,12 +298,44 @@ mod tests {
         let rocket = rocket::ignite().attach(StaticFileServer::new(fs, "/test").unwrap());
         let client = Client::new(rocket).expect("valid rocket");
 
+        // Test simply getting a file
         let resp = client.get("/test/lib.rs").dispatch();
         assert_eq!(resp.status(), Status::Ok);
-        assert_eq!(resp.headers().get_one("Content-Type").expect("no content type"), "text/x-rust");
-        let last_modified = resp.headers().get_one("Last-Modified").expect("no last modified header").to_owned();
+        assert_eq!(
+            resp.headers()
+                .get_one("Content-Type")
+                .expect("no content type"),
+            "text/x-rust"
+        );
 
-        let resp = client.get("/test/lib.rs").header(Header::new("If-Modified-Since", last_modified)).dispatch();
+        let last_modified = resp.headers()
+            .get_one("Last-Modified")
+            .expect("no last modified header")
+            .to_owned();
+
+        // Check for NotModified on second response with If-Modified-Since header
+        let resp = client
+            .get("/test/lib.rs")
+            .header(Header::new("If-Modified-Since", last_modified))
+            .dispatch();
         assert_eq!(resp.status(), Status::NotModified);
+
+        // Test for Range support
+        let mut resp = client
+            .get("/test/lib.rs")
+            .header(Header::new("Range", "bytes=5-10"))
+            .dispatch();
+        let body = resp.body_bytes().unwrap();
+        assert_eq!(body.len(), 6);
+    }
+
+    #[test]
+    fn test_parse_range_header() {
+        let range: Range = "bytes=0-1023"
+            .parse()
+            .expect("unable to parse Range header");
+        assert_eq!(range.start, 0);
+        assert_eq!(range.end, 1023);
+        assert_eq!(range.typ, "bytes");
     }
 }

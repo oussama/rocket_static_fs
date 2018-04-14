@@ -14,3 +14,8 @@ rocket = "0.3"
 chrono = "0.4"
 mime_guess = "1.8"
 flate2 = "1.0"
+lazy_static = "1.0"
+regex = "0.2"
+
+[dev-dependencies]
+rocket_codegen = "0.3"
