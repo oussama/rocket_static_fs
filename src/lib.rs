@@ -233,8 +233,16 @@ where
         }
 
         // Let's parse the range header if it exists
-        let range = request.headers().get_one("Range").unwrap_or("");
-        let range = range.parse::<Range>();
+        let range_header = request.headers().get_one("Range").unwrap_or("");
+
+        // If we get a multipart range request, we more or less fail gracefully here for the moment.
+        // We simply set the range here to an error and send the complete file cause of that.
+        // TODO: Support multipart ranges
+        let range: Result<Range, Box<StdError>> = if range_header.contains(',') {
+            Err(Box::new(Error::new("multipart ranges not supported")))
+        } else {
+            range_header.parse::<Range>()
+        };
 
         // Set the start byte for the request
         let start = match range {
