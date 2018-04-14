@@ -8,6 +8,7 @@ A simple static file server for Rust's rocket framework.
 
 - Basic HTTP caching via Last-Modified header
 - GZip encoding
+- `Range` support
 
 ## Todos
 
