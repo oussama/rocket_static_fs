@@ -191,7 +191,7 @@ where
         // TODO: Support directory listing
         if !self.fs.is_file(&req_path) {
             //response.set_status(Status::NotFound);
-            req_path = "index.html";
+            req_path = "index.html".to_string();
             //return;
         };
 
