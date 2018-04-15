@@ -1,6 +1,6 @@
 [package]
 name = "rocket_static_fs"
-version = "0.3.0"
+version = "0.3.1"
 description = "A simple static file server for the rocket framework."
 repository = "https://github.com/ekranos/rocket_static_fs"
 homepage = "https://github.com/ekranos/rocket_static_fs"

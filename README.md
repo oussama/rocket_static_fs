@@ -2,7 +2,9 @@
 
 A simple static file server for Rust's rocket framework.
 
-[Documentation](https://docs.rs/rocket_static_fs)
+[Documentation at docs.rs (currently broken)](https://docs.rs/rocket_static_fs)
+
+[Documentation mirror](https://public.ekranos.me/docs/rust/rocket_static_fs/rocket_static_fs/)
 
 ## Features
 
