@@ -179,7 +179,7 @@ where
         }
 
         // Strip out the prefix to get the normal file path
-        let req_path = uri.replacen(&self.prefix, "", 1);
+        let mut req_path = uri.replacen(&self.prefix, "", 1);
 
         // Fail on paths outside of the given path
         if !self.fs.path_valid(&req_path) {
@@ -190,8 +190,9 @@ where
         // Fail if it is no file
         // TODO: Support directory listing
         if !self.fs.is_file(&req_path) {
-            response.set_status(Status::NotFound);
-            return;
+            //response.set_status(Status::NotFound);
+            req_path = "index.html";
+            //return;
         };
 
         // Let's set the mime type here, this can't possibly go wrong anymore *cough*.
