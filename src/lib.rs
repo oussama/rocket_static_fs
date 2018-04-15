@@ -20,8 +20,9 @@
 //! }
 //!
 //! fn main() {
+//!     let fs = fs::LocalFileSystem::new("src");
 //!     rocket::ignite()
-//!         .attach(StaticFileServer::new(fs::LocalFileSystem::new("src"), "/src/").unwrap())
+//!         .attach(StaticFileServer::new(fs, "/src/").unwrap())
 //!         .mount("/", routes![index]);
 //!     // And finally launch it
 //! }
@@ -35,6 +36,7 @@ extern crate rocket;
 #[macro_use]
 extern crate lazy_static;
 extern crate byteorder;
+extern crate walkdir;
 
 pub mod fs;
 
@@ -299,6 +301,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    #[allow(unused)]
+    use super::fs::EmbeddedFileSystem;
     use super::fs::LocalFileSystem;
     use super::Range;
     use super::StaticFileServer;
@@ -343,6 +347,55 @@ mod tests {
         assert_eq!(resp.headers().get_one("Content-Length"), Some("6"));
         let body = resp.body_bytes().unwrap();
         assert_eq!(body.len(), 6);
+    }
+
+    #[test]
+    #[cfg(feature = "test_embedded")]
+    fn test_with_embedded_filesystem() {
+        let bytes = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/target/test.package"));
+        let fs = EmbeddedFileSystem::from_bytes(bytes);
+
+        match fs {
+            Ok(fs) => {
+                let rocket = rocket::ignite().attach(StaticFileServer::new(fs, "/test").unwrap());
+                let client = Client::new(rocket).expect("valid rocket");
+
+                let mut resp = client.get("/test/hello.txt").dispatch();
+                assert_eq!(resp.status(), Status::Ok);
+                assert_eq!(
+                    resp.headers()
+                        .get_one("Content-Type")
+                        .expect("no content type"),
+                    "text/plain"
+                );
+                assert_eq!(resp.body_string(), Some("Hello World!".to_string()));
+
+                let last_modified = resp.headers()
+                    .get_one("Last-Modified")
+                    .expect("no last modified header")
+                    .to_owned();
+
+                // Check for NotModified on second response with If-Modified-Since header
+                let resp = client
+                    .get("/test/hello.txt")
+                    .header(Header::new("If-Modified-Since", last_modified))
+                    .dispatch();
+                assert_eq!(resp.status(), Status::NotModified);
+
+                // Test for Range support
+                let mut resp = client
+                    .get("/test/hello.txt")
+                    .header(Header::new("Range", "bytes=5-10"))
+                    .dispatch();
+                assert_eq!(resp.status(), Status::PartialContent);
+                assert_eq!(resp.headers().get_one("Content-Length"), Some("6"));
+                assert_eq!(resp.body_string(), Some(" World".to_string()));
+            }
+            Err(e) => panic!(format!(
+                "unable to load test.package, maybe you just need to re-run the test: {}",
+                e
+            )),
+        }
     }
 
     #[test]
