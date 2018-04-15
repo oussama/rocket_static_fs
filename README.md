@@ -10,7 +10,7 @@ A simple static file server for Rust's rocket framework.
 - GZip encoding
 - `Range` support (no multipart ranges yet)
 - Support for multiple file backends:
-  - LocalFileSystem => serve file from a local directory
+  - LocalFileSystem => serve files from a local directory
   - EmbeddedFileSystem => serve files which are bundled into the binary
     - An example for that is documented on the EmbeddedFileSystem struct
   - You can add your own FileSystem implementations by implementing the fs::FileSystem trait
